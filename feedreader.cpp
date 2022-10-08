@@ -25,6 +25,17 @@ std::string to_lower(std::string str){
     return str;
 }
 
+void print_help(){
+    std::cerr << "Usage: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u]\n";
+    std::cerr << "-f <feedfile>\tspecify a file with a list of URLs to read from\n";
+    std::cerr << "-c <certfile>\tspecify a certificate to use\n";
+    std::cerr << "-C <certdir>\tspecify a directory with certificates to use\n";
+    std::cerr << "-T\t\tprint the time of each feed entry\n";
+    std::cerr << "-a\t\tprint the author of each feed entry\n";
+    std::cerr << "-u\t\tprint the associated url of each feed entry\n";
+    std::cerr << "-h\t\tprint this help message and exit\n";
+}
+
 //Read urls from given feedfile and save them as strings to vector urls
 void read_feedfile(char *feedfile, std::vector<std::string> &urls){
     std::ifstream file(feedfile);
@@ -86,7 +97,7 @@ int main(int argc, char *argv[]){
     std::string cert_file, cert_dir;
     bool show_time = false, show_author = false, show_url = false;
     int c;
-    while((c = getopt(argc, argv, "f:c:C:Tau")) != -1){
+    while((c = getopt(argc, argv, "f:c:C:Tauh")) != -1){
         switch(c) {
             case 'f':
                 read_feedfile(optarg, urls);
@@ -106,8 +117,13 @@ int main(int argc, char *argv[]){
             case 'u':
                 show_url = true;
                 break;
+            case 'h':
+                std::cerr << "Feedreader - an utility to get information from RSS feeds\n";
+                print_help();
+                return 1;
             default:
                 std::cerr << "Invalid argument\n";
+                print_help();
                 return 1;
         }
     }
@@ -117,6 +133,7 @@ int main(int argc, char *argv[]){
 
     if(urls.empty()){
         std::cerr << "No URL specified\n";
+        print_help();
         return 1;
     }
 
