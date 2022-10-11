@@ -16,17 +16,12 @@ typedef struct url {
     protocol_t protocol;
     std::string hostname;
     std::string resource;
+    std::string authority;
     unsigned long port;
 } url_t;
 
-std::string to_lower(std::string str){
-    for(std::size_t i = 0; i < str.length(); i++)
-        str[i] = std::tolower(str[i]);
-    return str;
-}
-
 void print_help(){
-    std::cerr << "Usage: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u]\n";
+    std::cerr << "Usage: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u] [-h]\n";
     std::cerr << "-f <feedfile>\tspecify a file with a list of URLs to read from\n";
     std::cerr << "-c <certfile>\tspecify a certificate to use\n";
     std::cerr << "-C <certdir>\tspecify a directory with certificates to use\n";
@@ -73,11 +68,14 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
         else
             try{
                 url.port = std::stoul(port);
+                if(url.port < 1 || url.port > 65535)
+                    throw std::exception();
             }
             catch(const std::exception &e){
                 std::cerr << "Failed parsing URL (invalid port): " << i << '\n';
                 exit(1);
             }
+        url.authority = url.hostname + ":" + std::to_string(url.port);
 
         out_urls.push_back(url);
     }
@@ -94,7 +92,7 @@ int main(int argc, char *argv[]){
         argc--;
     }
 
-    std::string cert_file, cert_dir;
+    char *cert_file = NULL, *cert_dir = NULL;
     bool show_time = false, show_author = false, show_url = false;
     int c;
     while((c = getopt(argc, argv, "f:c:C:Tauh")) != -1){
@@ -142,94 +140,133 @@ int main(int argc, char *argv[]){
         std::cout << i.protocol << i.hostname << i.port << i.resource << '\n';
     }
 
-    /*#define HOST_NAME "www.random.org"
-    #define HOST_PORT "443"
-    #define HOST_RESOURCE "/cgi-bin/randbyte?nbytes=32&format=h"
-
-    long res = 1;
-
-    SSL_CTX* ctx = NULL;
-    BIO *web = NULL, *out = NULL;
-    SSL *ssl = NULL;
-
     SSL_library_init();
+	SSL_load_error_strings();
+	ERR_load_BIO_strings();
+	OpenSSL_add_all_algorithms();
 
-    SSL_load_error_strings();
+	for(auto url : parsed_urls){
+		BIO *bio;
+		SSL_CTX *ctx;
+        if(url.protocol == HTTP){
+            ctx = SSL_CTX_new(SSLv23_client_method());
 
-    const SSL_METHOD* method = SSLv23_method();
-    if(!(NULL != method)) handleFailure();
+            int err;
+            if(!cert_file && !cert_dir)
+                err = SSL_CTX_set_default_verify_paths(ctx);
+            else
+                err = SSL_CTX_load_verify_locations(ctx, cert_file, cert_dir);
+            if(err){
+                std::cerr << "Certificate verification failed\n";
+                return 1;
+            }
 
-    ctx = SSL_CTX_new(method);
-    if(!(ctx != NULL)) handleFailure();
+            bio = BIO_new_ssl_connect(ctx);
+        }
+        else{
+            bio = BIO_new_connect(url.authority.c_str());
+        }
 
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, verify_callback);
 
-    SSL_CTX_set_verify_depth(ctx, 4);
+		/*if (!bio)
+		{
+			PRINTF_ERR("Connection to '%s' failed.", url.c_str());
+			PROCESS_BIO_ERROR;
+		}
 
-    const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION;
-    SSL_CTX_set_options(ctx, flags);
+		SSL *ssl = nullptr;
+		if (urlParser.isHttps())
+		{
+			BIO_get_ssl(bio, &ssl);
+			SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+			BIO_set_conn_hostname(bio, urlParser.getAuthority()->c_str());
+		}
 
-    res = SSL_CTX_load_verify_locations(ctx, "random-org-chain.pem", NULL);
-    if(!(1 == res)) handleFailure();
+		if (BIO_do_connect(bio) <= 0)
+		{
+			PRINTF_ERR("Connection to '%s' failed.", url.c_str());
+			PROCESS_BIO_ERROR;
+		}
 
-    web = BIO_new_ssl_connect(ctx);
-    if(!(web != NULL)) handleFailure();
+		if (ssl && SSL_get_verify_result(ssl) != X509_V_OK)
+		{
+			PRINTF_ERR(
+				"Verification of certificates on '%s' failed.", url.c_str()
+			);
+			PROCESS_BIO_ERROR;
+		}
 
-    res = BIO_set_conn_hostname(web, HOST_NAME ":" HOST_PORT);
-    if(!(1 == res)) handleFailure();
+		std::string request(
+			"GET " + *urlParser.getPath() + " HTTP/1.0\r\n"
+			"Host: " + *urlParser.getAuthority() + "\r\n"
+			"Connection: Close\r\n"
+			"User-Agent: Mozilla/5.0 Chrome/70.0.3538.77 Safari/537.36\r\n"
+			"\r\n"
+		);
+		auto writeDataSize = static_cast<int>(request.size());
+		bool firstWrite = true, writeDone = false;
+		while (firstWrite || BIO_should_retry(bio))
+		{
+			firstWrite = false;
+			if (BIO_write(bio, request.c_str(), writeDataSize))
+			{
+				writeDone = true;
+				break;
+			}
+		}
+		if (!writeDone)
+		{
+			PRINT_ERR("Bio write error.");
+			PROCESS_BIO_ERROR;
+		}
 
-    BIO_get_ssl(web, &ssl);
-    if(!(ssl != NULL)) handleFailure();
+		char responseBuffer[READ_BUFFER_SIZE] = {'\0'};
+		std::string response;
+		int readResult = 0;
+		do
+		{
+			bool firstRead = true, readDone = false;
+			while (firstRead || BIO_should_retry(bio))
+			{
+				firstRead = false;
+				readResult =
+					BIO_read(bio, responseBuffer, READ_BUFFER_SIZE - 1);
+				if (readResult >= 0)
+				{
+					if (readResult > 0)
+					{
+						responseBuffer[readResult] = '\0';
+						response += responseBuffer;
+					}
 
-    res = SSL_set_tlsext_host_name(ssl, HOST_NAME);
-    if(!(1 == res)) handleFailure();
+					readDone = true;
+					break;
+				}
+			}
+			if (!readDone)
+			{
+				PRINT_ERR("Bio read error.");
+				PROCESS_BIO_ERROR;
+			}
+		}
+		while (readResult != 0);
 
-    out = BIO_new_fp(stdout, BIO_NOCLOSE);
-    if(!(NULL != out)) handleFailure();
+		std::string responseBody;
+		if (!parseHttpResponse(response, &responseBody))
+		{
+			PRINTF_ERR("Invalid HTTP response from '%s'.", url.c_str());
+			CLEAN_RESOURCES;
+			PROCESS_ERROR;
+		}
 
-    res = BIO_do_connect(web);
-    if(!(1 == res)) handleFailure();
+		if (!XmlParser::parseXmlFeed(responseBody, argumentProcessor, url))
+		{
+			CLEAN_RESOURCES;
+			PROCESS_ERROR;
+		}
 
-    res = BIO_do_handshake(web);
-    if(!(1 == res)) handleFailure();
-
-    // Step 1: verify a server certificate was presented during the negotiation 
-    X509* cert = SSL_get_peer_certificate(ssl);
-    if(cert) { X509_free(cert); } 
-    if(NULL == cert) handleFailure();
-
-    // Step 2: verify the result of chain verification
-    // Verification performed according to RFC 4158
-    res = SSL_get_verify_result(ssl);
-    if(!(X509_V_OK == res)) handleFailure();
-
-    // Step 3: hostname verification
-    // An exercise left to the reader
-
-    BIO_puts(web, "GET " HOST_RESOURCE " HTTP/1.1\r\n"
-                "Host: " HOST_NAME "\r\n"
-                "Connection: close\r\n\r\n");
-    BIO_puts(out, "\n");
-
-    int len = 0;
-    do
-    {
-    char buff[1536] = {};
-    len = BIO_read(web, buff, sizeof(buff));
-                
-    if(len > 0)
-        BIO_write(out, buff, len);
-
-    } while (len > 0 || BIO_should_retry(web));
-
-    if(out)
-    BIO_free(out);
-
-    if(web != NULL)
-    BIO_free_all(web);
-
-    if(NULL != ctx)
-    SSL_CTX_free(ctx);*/
+		CLEAN_RESOURCES;*/
+	}
 
     return 0;
 }
