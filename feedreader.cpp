@@ -10,6 +10,8 @@
 #include <vector>
 #include <regex>
 
+#define BUF_SIZE 4096
+
 enum protocol_t {HTTP, HTTPS};
 
 typedef struct url {
@@ -17,6 +19,7 @@ typedef struct url {
     std::string hostname;
     std::string resource;
     std::string authority;
+    std::string url;
     unsigned long port;
 } url_t;
 
@@ -46,6 +49,7 @@ void read_feedfile(char *feedfile, std::vector<std::string> &urls){
     }
 }
 
+//Parse vector of urls using regex
 std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     std::vector<url_t> out_urls;
     for(auto i: urls){
@@ -61,6 +65,7 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
         url.protocol = std::string(matches[1]) == "https" ? HTTPS : HTTP;
         url.hostname = std::string(matches[2]);
         url.resource = std::string(matches[5]);
+        url.url = i;
 
         std::string port(matches[4]);
         if(port.empty())
@@ -92,6 +97,7 @@ int main(int argc, char *argv[]){
         argc--;
     }
 
+    //Parse arguments
     char *cert_file = NULL, *cert_dir = NULL;
     bool show_time = false, show_author = false, show_url = false;
     int c;
@@ -118,7 +124,7 @@ int main(int argc, char *argv[]){
             case 'h':
                 std::cerr << "Feedreader - an utility to get information from RSS feeds\n";
                 print_help();
-                return 1;
+                return 0;
             default:
                 std::cerr << "Invalid argument\n";
                 print_help();
@@ -136,19 +142,20 @@ int main(int argc, char *argv[]){
     }
 
     auto parsed_urls = parse_urls(urls);
-    for(auto i: parsed_urls){
-        std::cout << i.protocol << i.hostname << i.port << i.resource << '\n';
-    }
 
+    //Set up OpenSSL
     SSL_library_init();
 	SSL_load_error_strings();
 	ERR_load_BIO_strings();
 	OpenSSL_add_all_algorithms();
 
+    //Loop through all urls
+    bool success = false;
 	for(auto url : parsed_urls){
 		BIO *bio;
 		SSL_CTX *ctx;
-        if(url.protocol == HTTP){
+        if(url.protocol == HTTPS){
+            //Set up certificates
             ctx = SSL_CTX_new(SSLv23_client_method());
 
             int err;
@@ -156,117 +163,79 @@ int main(int argc, char *argv[]){
                 err = SSL_CTX_set_default_verify_paths(ctx);
             else
                 err = SSL_CTX_load_verify_locations(ctx, cert_file, cert_dir);
-            if(err){
-                std::cerr << "Certificate verification failed\n";
-                return 1;
+            if(err == 0){
+                std::cerr << url.url << " - Certificate verification failed\n";
+                continue;
             }
 
             bio = BIO_new_ssl_connect(ctx);
         }
         else{
+            //Unsecure connection
             bio = BIO_new_connect(url.authority.c_str());
         }
 
+        //Verify initialized connection
+        if(!bio){
+            std::cerr << url.url << " - Connection failed\n";
+            continue;
+        }
 
-		/*if (!bio)
-		{
-			PRINTF_ERR("Connection to '%s' failed.", url.c_str());
-			PROCESS_BIO_ERROR;
-		}
-
-		SSL *ssl = nullptr;
-		if (urlParser.isHttps())
-		{
+        //Set secure connection parameters
+		SSL *ssl = NULL;
+		if(url.protocol == HTTPS){
 			BIO_get_ssl(bio, &ssl);
 			SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
-			BIO_set_conn_hostname(bio, urlParser.getAuthority()->c_str());
+			BIO_set_conn_hostname(bio, url.authority.c_str());
 		}
 
-		if (BIO_do_connect(bio) <= 0)
-		{
-			PRINTF_ERR("Connection to '%s' failed.", url.c_str());
-			PROCESS_BIO_ERROR;
+        //Make connection
+		if(BIO_do_connect(bio) <= 0){
+			std::cerr << url.url << " - Connection failed\n";
+            continue;
 		}
 
-		if (ssl && SSL_get_verify_result(ssl) != X509_V_OK)
-		{
-			PRINTF_ERR(
-				"Verification of certificates on '%s' failed.", url.c_str()
-			);
-			PROCESS_BIO_ERROR;
+        //Verify secure connection
+		if(ssl && SSL_get_verify_result(ssl) != X509_V_OK){
+			std::cerr << url.url << " - Connection failed\n";
+            continue;
 		}
 
 		std::string request(
-			"GET " + *urlParser.getPath() + " HTTP/1.0\r\n"
-			"Host: " + *urlParser.getAuthority() + "\r\n"
-			"Connection: Close\r\n"
-			"User-Agent: Mozilla/5.0 Chrome/70.0.3538.77 Safari/537.36\r\n"
-			"\r\n"
+			"GET " + url.resource + " HTTP/1.0\r\n"
+			"Host: " + url.authority + "\r\n"
+			"Connection: Close\r\n\r\n"
 		);
-		auto writeDataSize = static_cast<int>(request.size());
-		bool firstWrite = true, writeDone = false;
-		while (firstWrite || BIO_should_retry(bio))
-		{
-			firstWrite = false;
-			if (BIO_write(bio, request.c_str(), writeDataSize))
-			{
-				writeDone = true;
-				break;
-			}
-		}
-		if (!writeDone)
-		{
-			PRINT_ERR("Bio write error.");
-			PROCESS_BIO_ERROR;
-		}
+		
+        //Send request
+        int written = 0;
+        do{
+            written += BIO_write(bio, request.c_str(), request.size());
+        } while(BIO_should_retry(bio));
+        if(written != (int) request.size()){
+            std::cerr << url.url << " - Failed sending request\n";
+            continue;
+        }
 
-		char responseBuffer[READ_BUFFER_SIZE] = {'\0'};
-		std::string response;
-		int readResult = 0;
-		do
-		{
-			bool firstRead = true, readDone = false;
-			while (firstRead || BIO_should_retry(bio))
-			{
-				firstRead = false;
-				readResult =
-					BIO_read(bio, responseBuffer, READ_BUFFER_SIZE - 1);
-				if (readResult >= 0)
-				{
-					if (readResult > 0)
-					{
-						responseBuffer[readResult] = '\0';
-						response += responseBuffer;
-					}
+        //Get response
+		char buf[BUF_SIZE] = "";
+        std::string response;
+        int res;
+        do{
+            res = BIO_read(bio, buf, BUF_SIZE - 1);
+            if(res > 0){
+                buf[res] = '\0';
+                response += buf;
+            }
+        } while(BIO_should_retry(bio) || res != 0);
+        if(response.empty()){
+            std::cerr << url.url << " - Connection failed\n";
+            continue;
+        }
 
-					readDone = true;
-					break;
-				}
-			}
-			if (!readDone)
-			{
-				PRINT_ERR("Bio read error.");
-				PROCESS_BIO_ERROR;
-			}
-		}
-		while (readResult != 0);
-
-		std::string responseBody;
-		if (!parseHttpResponse(response, &responseBody))
-		{
-			PRINTF_ERR("Invalid HTTP response from '%s'.", url.c_str());
-			CLEAN_RESOURCES;
-			PROCESS_ERROR;
-		}
-
-		if (!XmlParser::parseXmlFeed(responseBody, argumentProcessor, url))
-		{
-			CLEAN_RESOURCES;
-			PROCESS_ERROR;
-		}
-
-		CLEAN_RESOURCES;*/
+		std::cout << response;
+        success = true;
 	}
 
-    return 0;
+    return success ? 0 : 1;
 }

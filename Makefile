@@ -1,7 +1,12 @@
-all: feedreader
+XMLLDFLAGS!=pkg-config --libs libxml-2.0
+XMLLDFLAGS+=$(shell pkg-config --libs libxml-2.0)
+XMLCFLAGS!=pkg-config --cflags libxml-2.0
+XMLCFLAGS+=$(shell pkg-config --cflags libxml-2.0)
+
+CXXFLAGS:=$(XMLCFLAGS) -std=c++17 -Wall -Wextra -g
+LDLIBS:=$(XMLLDFLAGS) -lssl -lcrypto
 
 feedreader: feedreader.cpp
-	g++ `pkg-config --cflags --libs libxml-2.0` -lssl -lcrypto -g -std=c++17 -Wall -Wextra -pedantic $@.cpp -o $@
 
 clean:
 	rm -f feedreader
