@@ -12,6 +12,15 @@
 
 #define BUF_SIZE 4096
 
+#define ERROR_CONTINUE(msg) if(1){\
+    std::cerr << url.url << " - " << msg << "\n";\
+    if(bio)\
+        BIO_free_all(bio);\
+	if(ctx)\
+        SSL_CTX_free(ctx);\
+    continue;\
+}
+
 enum protocol_t {HTTP, HTTPS};
 
 typedef struct url {
@@ -87,6 +96,10 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     return out_urls;
 }
 
+bool parse_http(std::string &response){
+
+}
+
 int main(int argc, char *argv[]){
     std::vector<std::string> urls;
     //Ensure correct positional argument parsing when POSIXLY_CORRECT is set
@@ -152,8 +165,8 @@ int main(int argc, char *argv[]){
     //Loop through all urls
     bool success = false;
 	for(auto url : parsed_urls){
-		BIO *bio;
-		SSL_CTX *ctx;
+		BIO *bio = NULL;
+		SSL_CTX *ctx = NULL;
         if(url.protocol == HTTPS){
             //Set up certificates
             ctx = SSL_CTX_new(SSLv23_client_method());
@@ -163,10 +176,8 @@ int main(int argc, char *argv[]){
                 err = SSL_CTX_set_default_verify_paths(ctx);
             else
                 err = SSL_CTX_load_verify_locations(ctx, cert_file, cert_dir);
-            if(err == 0){
-                std::cerr << url.url << " - Certificate verification failed\n";
-                continue;
-            }
+            if(err == 0)
+                ERROR_CONTINUE("Certificate verification failed");
 
             bio = BIO_new_ssl_connect(ctx);
         }
@@ -176,10 +187,8 @@ int main(int argc, char *argv[]){
         }
 
         //Verify initialized connection
-        if(!bio){
-            std::cerr << url.url << " - Connection failed\n";
-            continue;
-        }
+        if(!bio)
+            ERROR_CONTINUE("Connection failed");
 
         //Set secure connection parameters
 		SSL *ssl = NULL;
@@ -190,20 +199,23 @@ int main(int argc, char *argv[]){
 		}
 
         //Make connection
-		if(BIO_do_connect(bio) <= 0){
-			std::cerr << url.url << " - Connection failed\n";
-            continue;
-		}
+		if(BIO_do_connect(bio) <= 0)
+			ERROR_CONTINUE("Connection failed");
 
-        //Verify secure connection
-		if(ssl && SSL_get_verify_result(ssl) != X509_V_OK){
-			std::cerr << url.url << " - Connection failed\n";
-            continue;
-		}
+        //Verify we've got a certificate
+        X509 *cert = SSL_get_peer_certificate(ssl);
+        if(!cert)
+            ERROR_CONTINUE("Invalid host certificate");
+        X509_free(cert);
+
+        //Verify the certificate
+		if(ssl && SSL_get_verify_result(ssl) != X509_V_OK)
+			ERROR_CONTINUE("Connection failed");
 
 		std::string request(
 			"GET " + url.resource + " HTTP/1.0\r\n"
 			"Host: " + url.authority + "\r\n"
+            "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1\r\n"
 			"Connection: Close\r\n\r\n"
 		);
 		
@@ -212,10 +224,8 @@ int main(int argc, char *argv[]){
         do{
             written += BIO_write(bio, request.c_str(), request.size());
         } while(BIO_should_retry(bio));
-        if(written != (int) request.size()){
-            std::cerr << url.url << " - Failed sending request\n";
-            continue;
-        }
+        if(written != (int) request.size())
+            ERROR_CONTINUE("Failed sending request");
 
         //Get response
 		char buf[BUF_SIZE] = "";
@@ -228,13 +238,13 @@ int main(int argc, char *argv[]){
                 response += buf;
             }
         } while(BIO_should_retry(bio) || res != 0);
-        if(response.empty()){
-            std::cerr << url.url << " - Connection failed\n";
-            continue;
-        }
+        if(response.empty())
+            ERROR_CONTINUE("Connection failed");
 
 		std::cout << response;
         success = true;
+        BIO_free_all(bio);
+        SSL_CTX_free(ctx);
 	}
 
     return success ? 0 : 1;
