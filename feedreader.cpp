@@ -14,10 +14,9 @@
 
 #define ERROR_CONTINUE(msg) if(1){\
     std::cerr << url.url << " - " << msg << "\n";\
-    if(bio)\
-        BIO_free_all(bio);\
-	if(ctx)\
-        SSL_CTX_free(ctx);\
+    std::cerr << ERR_reason_error_string(ERR_get_error()) << "\n";\
+    if(bio) BIO_free_all(bio);\
+	if(ctx) SSL_CTX_free(ctx);\
     continue;\
 }
 
@@ -96,8 +95,23 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     return out_urls;
 }
 
+//Parse the response http headers, &response will contain received data on success, error message on failure
 bool parse_http(std::string &response){
+    std::size_t http_end = response.find("\r\n\r\n");
+    std::regex re(R"(^HTTP/1.[01] (\d{3} .+))");
+    std::smatch matches;
+    if(!std::regex_search(response, matches, re) || http_end == std::string::npos){
+        response = "Invalid HTTP response header";
+        return false;
+    }
 
+    if(matches[1] != "200 OK"){
+        response = "Invalid HTTP response code: " + std::string(matches[1]);
+        return false;
+    }
+
+    response = response.substr(http_end + 4);
+    return true;
 }
 
 int main(int argc, char *argv[]){
@@ -202,15 +216,20 @@ int main(int argc, char *argv[]){
 		if(BIO_do_connect(bio) <= 0)
 			ERROR_CONTINUE("Connection failed");
 
-        //Verify we've got a certificate
-        X509 *cert = SSL_get_peer_certificate(ssl);
-        if(!cert)
-            ERROR_CONTINUE("Invalid host certificate");
-        X509_free(cert);
+        if(url.protocol == HTTPS){
+            //Verify we've got a certificate
+            X509 *cert = SSL_get_peer_certificate(ssl);
+            if(!cert)
+                ERROR_CONTINUE("Invalid host certificate");
+            X509_free(cert);
 
-        //Verify the certificate
-		if(ssl && SSL_get_verify_result(ssl) != X509_V_OK)
-			ERROR_CONTINUE("Connection failed");
+            //Verify the certificate
+            long result = SSL_get_verify_result(ssl);
+            if(ssl && result != X509_V_OK){
+                std::cerr << result << "\n";
+                ERROR_CONTINUE("Connection failed");
+            }
+        }
 
 		std::string request(
 			"GET " + url.resource + " HTTP/1.0\r\n"
@@ -240,12 +259,21 @@ int main(int argc, char *argv[]){
         } while(BIO_should_retry(bio) || res != 0);
         if(response.empty())
             ERROR_CONTINUE("Connection failed");
+        
+        if(bio) BIO_free_all(bio);
+        if(ctx) SSL_CTX_free(ctx);
 
+        if(!parse_http(response)){
+            std::cerr << url.url << " - " << response << "\n";
+            continue;
+        }
 		std::cout << response;
         success = true;
-        BIO_free_all(bio);
-        SSL_CTX_free(ctx);
+        
 	}
 
-    return success ? 0 : 1;
+    if(!success)
+        return 1;
+
+    return 0;
 }
