@@ -114,6 +114,18 @@ bool parse_http(std::string &response){
     return true;
 }
 
+bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url){
+    xmlDocPtr doc = xmlParseDoc((xmlChar*) xml.c_str());
+    if(!doc)
+        return false;
+
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    if(!root)
+        return false;
+
+    root->
+}
+
 int main(int argc, char *argv[]){
     std::vector<std::string> urls;
     //Ensure correct positional argument parsing when POSIXLY_CORRECT is set
@@ -267,9 +279,11 @@ int main(int argc, char *argv[]){
             std::cerr << url.url << " - " << response << "\n";
             continue;
         }
-		std::cout << response;
+
+        if(!parse_xml(response, show_time, show_author, show_url))
+            continue;
+
         success = true;
-        
 	}
 
     if(!success)
