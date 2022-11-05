@@ -20,10 +20,14 @@
     continue;\
 }
 
-enum protocol_t {HTTP, HTTPS};
+#define XML_ERROR do{\
+    xmlCleanupParser();\
+    xmlFreeDoc(doc);\
+    return false;\
+} while(0)
 
 typedef struct url {
-    protocol_t protocol;
+    bool is_https;
     std::string hostname;
     std::string resource;
     std::string authority;
@@ -62,7 +66,7 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     std::vector<url_t> out_urls;
     for(auto i: urls){
         url_t url;
-        std::regex re(R"(^(https?)://([^/?#:]+)(:([0-9]+))?(.*)$)");
+        std::regex re(R"(^\s*(https?)://([^/?#:]+)(:([0-9]+))?(.*)$)");
         std::smatch matches;
 
         if(!std::regex_match(i, matches, re)){
@@ -70,14 +74,14 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
             exit(1);
         }
 
-        url.protocol = std::string(matches[1]) == "https" ? HTTPS : HTTP;
+        url.is_https = std::string(matches[1]) == "https";
         url.hostname = std::string(matches[2]);
         url.resource = std::string(matches[5]);
         url.url = i;
 
         std::string port(matches[4]);
         if(port.empty())
-            url.port = url.protocol == HTTPS ? 443 : 80;
+            url.port = url.is_https ? 443 : 80;
         else
             try{
                 url.port = std::stoul(port);
@@ -95,7 +99,7 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     return out_urls;
 }
 
-//Parse the response http headers, &response will contain received data on success, error message on failure
+//Parse the response http headers, response will contain received data on success, error message on failure
 bool parse_http(std::string &response){
     std::size_t http_end = response.find("\r\n\r\n");
     std::regex re(R"(^HTTP/1.[01] (\d{3} .+))");
@@ -114,6 +118,23 @@ bool parse_http(std::string &response){
     return true;
 }
 
+xmlNodePtr find_node(xmlNodePtr first_node, xmlChar *name){
+    for(xmlNodePtr node = first_node; node != NULL; node = node->next){
+        if(!xmlStrcmp(node->name, name)){
+            return node;
+        }
+    }
+    return NULL;
+}
+
+xmlChar *node_content(xmlNodePtr first_node, xmlChar *name){
+    xmlNodePtr node = find_node(first_node, name);
+    if(!node)
+        return NULL;
+    else
+        return xmlNodeGetContent(node);
+}
+
 bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url){
     xmlDocPtr doc = xmlParseDoc((xmlChar*) xml.c_str());
     if(!doc)
@@ -121,9 +142,58 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
 
     xmlNodePtr root = xmlDocGetRootElement(doc);
     if(!root)
-        return false;
+        XML_ERROR;
 
-    root->
+    bool is_rss;
+    if(!xmlStrcmp(root->name, (xmlChar *)"rss") &&
+       !xmlStrcmp(xmlGetProp(root, (xmlChar *)"version"), (xmlChar *)"2.0"))
+        is_rss = true;
+    else if(!xmlStrcmp(root->name, (xmlChar *)"feed") &&
+            !xmlStrcmp(root->ns->href, (xmlChar *)"http://www.w3.org/2005/Atom"))
+        is_rss = false;
+    else
+        XML_ERROR;
+
+    //In RSS, all elements are one level deeper in element "channel"
+    if(is_rss)
+        root = root->children;
+
+    //Get title
+    xmlChar *title = node_content(root->children, (xmlChar *)"title");
+    if(!title)
+        XML_ERROR;
+    std::cout << "*** " << title << " ***\n";
+
+    //Parse entries
+    bool first_entry = true;
+    xmlChar *entry_name = (xmlChar *)(is_rss ? "item" : "entry");
+    xmlNodePtr node = find_node(root->children, entry_name);
+    do{
+        if(!first_entry && (show_author || show_time || show_url))
+            std::cout << "\n";
+        first_entry = false;
+
+        xmlChar *title = node_content(node->children, (xmlChar *)"title");
+        if(!title)
+            XML_ERROR;
+        std::cout << title << "\n";
+
+        xmlNodePtr url_node, author_node, time_node;
+        if(show_url && (url_node = find_node(node->children, (xmlChar *)"link"))){
+            xmlChar *url = is_rss ? xmlNodeGetContent(url_node) : xmlGetProp(url_node, (xmlChar *)"href");
+            std::cout << "URL: " << url << "\n";
+        }
+
+        if(show_author && (author_node = find_node(node->children, (xmlChar *)"author")))
+            std::cout << "Autor: " << xmlNodeGetContent(is_rss ? author_node : author_node->children) << "\n";
+
+        if(show_time && (time_node = find_node(node->children, (xmlChar *)(is_rss ? "pubDate" : "updated"))))
+            std::cout << "Aktualizace: " << xmlNodeGetContent(time_node) << "\n";
+    } while((node = find_node(node->next, entry_name)));
+
+    xmlCleanupParser();
+    xmlFreeDoc(doc);
+    return true;
 }
 
 int main(int argc, char *argv[]){
@@ -189,11 +259,16 @@ int main(int argc, char *argv[]){
 	OpenSSL_add_all_algorithms();
 
     //Loop through all urls
-    bool success = false;
+    int success = 0;
+    bool first_url = true;
 	for(auto url : parsed_urls){
+        if(!first_url && parsed_urls.size() > 1)
+            std::cout << "\n";
+        first_url = false;
+
 		BIO *bio = NULL;
 		SSL_CTX *ctx = NULL;
-        if(url.protocol == HTTPS){
+        if(url.is_https){
             //Set up certificates
             ctx = SSL_CTX_new(SSLv23_client_method());
 
@@ -218,9 +293,10 @@ int main(int argc, char *argv[]){
 
         //Set secure connection parameters
 		SSL *ssl = NULL;
-		if(url.protocol == HTTPS){
+		if(url.is_https){
 			BIO_get_ssl(bio, &ssl);
 			SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+            SSL_set_tlsext_host_name(ssl, url.authority.c_str());
 			BIO_set_conn_hostname(bio, url.authority.c_str());
 		}
 
@@ -228,7 +304,7 @@ int main(int argc, char *argv[]){
 		if(BIO_do_connect(bio) <= 0)
 			ERROR_CONTINUE("Connection failed");
 
-        if(url.protocol == HTTPS){
+        if(url.is_https){
             //Verify we've got a certificate
             X509 *cert = SSL_get_peer_certificate(ssl);
             if(!cert)
@@ -237,10 +313,8 @@ int main(int argc, char *argv[]){
 
             //Verify the certificate
             long result = SSL_get_verify_result(ssl);
-            if(ssl && result != X509_V_OK){
-                std::cerr << result << "\n";
+            if(ssl && result != X509_V_OK)
                 ERROR_CONTINUE("Connection failed");
-            }
         }
 
 		std::string request(
@@ -280,14 +354,13 @@ int main(int argc, char *argv[]){
             continue;
         }
 
-        if(!parse_xml(response, show_time, show_author, show_url))
+        if(!parse_xml(response, show_time, show_author, show_url)){
+            std::cerr << url.url << " - Error parsing XML\n";
             continue;
+        }
 
-        success = true;
+        success = 1;
 	}
 
-    if(!success)
-        return 1;
-
-    return 0;
+    return success;
 }
