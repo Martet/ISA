@@ -38,6 +38,14 @@ typedef struct url {
     unsigned long port;
 } url_t;
 
+typedef struct args {
+    bool show_time;
+    bool show_author;
+    bool show_url;
+    char *cert_file;
+    char *cert_dir;
+} args_t;
+
 void print_help(){
     std::cerr << "Usage: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u] [-h]\n";
     std::cerr << "-f <feedfile>\tspecify a file with a list of URLs to read from\n";
@@ -62,6 +70,60 @@ void read_feedfile(char *feedfile, std::vector<std::string> &urls){
         if(!line.empty() && line[0] != '#')
             urls.push_back(line);
     }
+}
+
+args_t parse_args(int argc, char *argv[], std::vector<std::string> &urls){
+    //Ensure correct positional argument parsing when POSIXLY_CORRECT is set
+    if(argc > 1 && argv[1][0] != '-'){
+        urls.push_back(std::string(argv[1]));
+        argv[1] = argv[0];
+        argv++;
+        argc--;
+    }
+
+    args_t args = {};
+    int c;
+    while((c = getopt(argc, argv, "f:c:C:Tauh")) != -1){
+        switch(c) {
+            case 'f':
+                read_feedfile(optarg, urls);
+                break;
+            case 'c':
+                args.cert_file = optarg;
+                break;
+            case 'C':
+                args.cert_dir = optarg;
+                break;
+            case 'T':
+                args.show_time = true;
+                break;
+            case 'a':
+                args.show_author = true;
+                break;
+            case 'u':
+                args.show_url = true;
+                break;
+            case 'h':
+                std::cerr << "Feedreader - an utility to get information from RSS feeds\n";
+                print_help();
+                exit(0);
+            default:
+                std::cerr << "Invalid argument\n";
+                print_help();
+                exit(1);
+        }
+    }
+    //getopt shuffled positional arguments to end, save them as urls
+    for(int i = optind; i < argc; i++)
+        urls.push_back(std::string(argv[i]));
+
+    if(urls.empty()){
+        std::cerr << "No URL specified\n";
+        print_help();
+        exit(1);
+    }
+
+    return args;
 }
 
 //Parse vector of urls using regex
@@ -118,6 +180,36 @@ bool parse_http(std::string &response){
     }
 
     response = response.substr(http_end + 4);
+    return true;
+}
+
+bool do_request(BIO *bio, url_t url, std::string &response){
+    std::string request(
+        "GET " + url.resource + " HTTP/1.0\r\n"
+        "Host: " + url.authority + "\r\n"
+        "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1\r\n"
+        "Connection: Close\r\n\r\n"
+    );
+
+    //Send request
+    int written = 0;
+    do{
+        written += BIO_write(bio, request.c_str(), request.size());
+    } while(BIO_should_retry(bio));
+    if(written != (int) request.size())
+        return false;
+
+    //Get response
+    char buf[BUF_SIZE] = "";
+    int res;
+    do{
+        res = BIO_read(bio, buf, BUF_SIZE - 1);
+        if(res > 0){
+            buf[res] = '\0';
+            response += buf;
+        }
+    } while(BIO_should_retry(bio) || res != 0);
+    
     return true;
 }
 
@@ -211,59 +303,9 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
 }
 
 int main(int argc, char *argv[]){
+    //Parse arguments and urls
     std::vector<std::string> urls;
-    //Ensure correct positional argument parsing when POSIXLY_CORRECT is set
-    if(argc > 1 && argv[1][0] != '-'){
-        urls.push_back(std::string(argv[1]));
-        argv[1] = argv[0];
-        argv++;
-        argc--;
-    }
-
-    //Parse arguments
-    char *cert_file = NULL, *cert_dir = NULL;
-    bool show_time = false, show_author = false, show_url = false;
-    int c;
-    while((c = getopt(argc, argv, "f:c:C:Tauh")) != -1){
-        switch(c) {
-            case 'f':
-                read_feedfile(optarg, urls);
-                break;
-            case 'c':
-                cert_file = optarg;
-                break;
-            case 'C':
-                cert_dir = optarg;
-                break;
-            case 'T':
-                show_time = true;
-                break;
-            case 'a':
-                show_author = true;
-                break;
-            case 'u':
-                show_url = true;
-                break;
-            case 'h':
-                std::cerr << "Feedreader - an utility to get information from RSS feeds\n";
-                print_help();
-                return 0;
-            default:
-                std::cerr << "Invalid argument\n";
-                print_help();
-                return 1;
-        }
-    }
-    //getopt shuffled positional arguments to end, save them as urls
-    for(int i = optind; i < argc; i++)
-        urls.push_back(std::string(argv[i]));
-
-    if(urls.empty()){
-        std::cerr << "No URL specified\n";
-        print_help();
-        return 1;
-    }
-
+    args_t args = parse_args(argc, argv, urls);
     auto parsed_urls = parse_urls(urls);
 
     //Set up OpenSSL
@@ -286,17 +328,17 @@ int main(int argc, char *argv[]){
             ctx = SSL_CTX_new(TLS_client_method());
 
             int err;
-            if(!cert_file && !cert_dir)
+            if(!args.cert_file && !args.cert_dir)
                 err = SSL_CTX_set_default_verify_paths(ctx);
             else
-                err = SSL_CTX_load_verify_locations(ctx, cert_file, cert_dir);
+                err = SSL_CTX_load_verify_locations(ctx, args.cert_file, args.cert_dir);
             if(err == 0)
                 ERROR_CONTINUE("Certificate verification failed");
 
             bio = BIO_new_ssl_connect(ctx);
         }
         else{
-            //Unsecure connection
+            //Insecure connection
             bio = BIO_new_connect(url.authority.c_str());
         }
 
@@ -330,35 +372,12 @@ int main(int argc, char *argv[]){
                 ERROR_CONTINUE("Connection failed");
         }
 
-        std::string request(
-            "GET " + url.resource + " HTTP/1.0\r\n"
-            "Host: " + url.authority + "\r\n"
-            "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1\r\n"
-            "Connection: Close\r\n\r\n"
-        );
-        
-        //Send request
-        int written = 0;
-        do{
-            written += BIO_write(bio, request.c_str(), request.size());
-        } while(BIO_should_retry(bio));
-        if(written != (int) request.size())
-            ERROR_CONTINUE("Failed sending request");
-
-        //Get response
-        char buf[BUF_SIZE] = "";
+        //Do the request
         std::string response;
-        int res;
-        do{
-            res = BIO_read(bio, buf, BUF_SIZE - 1);
-            if(res > 0){
-                buf[res] = '\0';
-                response += buf;
-            }
-        } while(BIO_should_retry(bio) || res != 0);
-        if(response.empty())
+        if(!do_request(bio, url, response))
             ERROR_CONTINUE("Connection failed");
         
+        //Free SSL
         if(bio){
             BIO_reset(bio);
             BIO_free_all(bio);
@@ -370,7 +389,7 @@ int main(int argc, char *argv[]){
             continue;
         }
 
-        if(!parse_xml(response, show_time, show_author, show_url)){
+        if(!parse_xml(response, args.show_time, args.show_author, args.show_url)){
             std::cerr << url.url << " - Error parsing XML\n";
             continue;
         }
