@@ -1,0 +1,7 @@
+# FIT
+https://www.fit.vut.cz/fit/news-rss/
+#Wikipedia
+https://en.wikipedia.org/w/api.php?hidebots=1&days=7&limit=50&hidewikidata=1&action=feedrecentchanges&feedformat=rss
+
+#The register
+https://www.theregister.com/headlines.atom

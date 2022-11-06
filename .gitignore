@@ -1,4 +1,4 @@
-*
-!feedreader.cpp
-!Makefile
+feedreader
+.*
 !.gitignore
+__pycache__

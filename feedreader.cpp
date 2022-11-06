@@ -14,7 +14,6 @@
 
 #define ERROR_CONTINUE(msg) if(1){\
     std::cerr << url.url << " - " << msg << "\n";\
-    std::cerr << ERR_reason_error_string(ERR_get_error()) << "\n";\
     if(bio){\
         BIO_reset(bio);\
         BIO_free_all(bio);\
@@ -310,8 +309,6 @@ int main(int argc, char *argv[]){
 
     //Set up OpenSSL
     SSL_library_init();
-    SSL_load_error_strings();
-    ERR_load_BIO_strings();
     OpenSSL_add_all_algorithms();
 
     //Loop through all urls

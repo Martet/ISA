@@ -8,5 +8,10 @@ LDLIBS:=$(XMLLDFLAGS) -lssl -lcrypto
 
 feedreader: feedreader.cpp
 
+test: feedreader
+	pytest
+
 clean:
 	rm -f feedreader
+
+.PHONY: test clean
