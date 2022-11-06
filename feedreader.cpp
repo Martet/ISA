@@ -15,8 +15,11 @@
 #define ERROR_CONTINUE(msg) if(1){\
     std::cerr << url.url << " - " << msg << "\n";\
     std::cerr << ERR_reason_error_string(ERR_get_error()) << "\n";\
-    if(bio) BIO_free_all(bio);\
-	if(ctx) SSL_CTX_free(ctx);\
+    if(bio){\
+        BIO_reset(bio);\
+        BIO_free_all(bio);\
+    }\
+    if(ctx) SSL_CTX_free(ctx);\
     continue;\
 }
 
@@ -145,24 +148,27 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
         XML_ERROR;
 
     bool is_rss;
+    xmlChar *prop = NULL;
     if(!xmlStrcmp(root->name, (xmlChar *)"rss") &&
-       !xmlStrcmp(xmlGetProp(root, (xmlChar *)"version"), (xmlChar *)"2.0"))
+       !xmlStrcmp(prop = xmlGetProp(root, (xmlChar *)"version"), (xmlChar *)"2.0"))
         is_rss = true;
     else if(!xmlStrcmp(root->name, (xmlChar *)"feed") &&
             !xmlStrcmp(root->ns->href, (xmlChar *)"http://www.w3.org/2005/Atom"))
         is_rss = false;
     else
         XML_ERROR;
+    if(prop) free(prop);
 
     //In RSS, all elements are one level deeper in element "channel"
     if(is_rss)
-        root = root->children;
+        root = root->children->next;
 
     //Get title
     xmlChar *title = node_content(root->children, (xmlChar *)"title");
     if(!title)
         XML_ERROR;
     std::cout << "*** " << title << " ***\n";
+    free(title);
 
     //Parse entries
     bool first_entry = true;
@@ -177,18 +183,26 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
         if(!title)
             XML_ERROR;
         std::cout << title << "\n";
+        free(title);
 
         xmlNodePtr url_node, author_node, time_node;
         if(show_url && (url_node = find_node(node->children, (xmlChar *)"link"))){
             xmlChar *url = is_rss ? xmlNodeGetContent(url_node) : xmlGetProp(url_node, (xmlChar *)"href");
             std::cout << "URL: " << url << "\n";
+            free(url);
         }
 
-        if(show_author && (author_node = find_node(node->children, (xmlChar *)"author")))
-            std::cout << "Autor: " << xmlNodeGetContent(is_rss ? author_node : author_node->children) << "\n";
+        if(show_author && (author_node = find_node(node->children, (xmlChar *)"author"))){
+            xmlChar *author = xmlNodeGetContent(is_rss ? author_node : author_node->children->next);
+            std::cout << "Autor: " << author << "\n";
+            free(author);
+        }
 
-        if(show_time && (time_node = find_node(node->children, (xmlChar *)(is_rss ? "pubDate" : "updated"))))
-            std::cout << "Aktualizace: " << xmlNodeGetContent(time_node) << "\n";
+        if(show_time && (time_node = find_node(node->children, (xmlChar *)(is_rss ? "pubDate" : "updated")))){
+            xmlChar *time = xmlNodeGetContent(time_node);
+            std::cout << "Aktualizace: " << time << "\n";
+            free(time);
+        }
     } while((node = find_node(node->next, entry_name)));
 
     xmlCleanupParser();
@@ -254,23 +268,22 @@ int main(int argc, char *argv[]){
 
     //Set up OpenSSL
     SSL_library_init();
-	SSL_load_error_strings();
-	ERR_load_BIO_strings();
-	OpenSSL_add_all_algorithms();
+    SSL_load_error_strings();
+    ERR_load_BIO_strings();
+    OpenSSL_add_all_algorithms();
 
     //Loop through all urls
-    int success = 0;
+    int success = 1;
     bool first_url = true;
-	for(auto url : parsed_urls){
+    for(auto url : parsed_urls){
         if(!first_url && parsed_urls.size() > 1)
             std::cout << "\n";
-        first_url = false;
 
-		BIO *bio = NULL;
-		SSL_CTX *ctx = NULL;
+        BIO *bio = NULL;
+        SSL_CTX *ctx = NULL;
         if(url.is_https){
             //Set up certificates
-            ctx = SSL_CTX_new(SSLv23_client_method());
+            ctx = SSL_CTX_new(TLS_client_method());
 
             int err;
             if(!cert_file && !cert_dir)
@@ -292,17 +305,17 @@ int main(int argc, char *argv[]){
             ERROR_CONTINUE("Connection failed");
 
         //Set secure connection parameters
-		SSL *ssl = NULL;
-		if(url.is_https){
-			BIO_get_ssl(bio, &ssl);
-			SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
-            SSL_set_tlsext_host_name(ssl, url.authority.c_str());
-			BIO_set_conn_hostname(bio, url.authority.c_str());
-		}
+        SSL *ssl = NULL;
+        if(url.is_https){
+            BIO_get_ssl(bio, &ssl);
+            SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+            SSL_set_tlsext_host_name(ssl, url.hostname.c_str());
+            BIO_set_conn_hostname(bio, url.authority.c_str());
+        }
 
         //Make connection
-		if(BIO_do_connect(bio) <= 0)
-			ERROR_CONTINUE("Connection failed");
+        if(BIO_do_connect(bio) <= 0)
+            ERROR_CONTINUE("Connection failed");
 
         if(url.is_https){
             //Verify we've got a certificate
@@ -317,13 +330,13 @@ int main(int argc, char *argv[]){
                 ERROR_CONTINUE("Connection failed");
         }
 
-		std::string request(
-			"GET " + url.resource + " HTTP/1.0\r\n"
-			"Host: " + url.authority + "\r\n"
+        std::string request(
+            "GET " + url.resource + " HTTP/1.0\r\n"
+            "Host: " + url.authority + "\r\n"
             "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1\r\n"
-			"Connection: Close\r\n\r\n"
-		);
-		
+            "Connection: Close\r\n\r\n"
+        );
+        
         //Send request
         int written = 0;
         do{
@@ -333,7 +346,7 @@ int main(int argc, char *argv[]){
             ERROR_CONTINUE("Failed sending request");
 
         //Get response
-		char buf[BUF_SIZE] = "";
+        char buf[BUF_SIZE] = "";
         std::string response;
         int res;
         do{
@@ -346,7 +359,10 @@ int main(int argc, char *argv[]){
         if(response.empty())
             ERROR_CONTINUE("Connection failed");
         
-        if(bio) BIO_free_all(bio);
+        if(bio){
+            BIO_reset(bio);
+            BIO_free_all(bio);
+        }
         if(ctx) SSL_CTX_free(ctx);
 
         if(!parse_http(response)){
@@ -359,8 +375,9 @@ int main(int argc, char *argv[]){
             continue;
         }
 
-        success = 1;
-	}
+        first_url = false;
+        success = 0;
+    }
 
     return success;
 }
