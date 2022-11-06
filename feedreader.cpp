@@ -325,7 +325,7 @@ int main(int argc, char *argv[]){
         SSL_CTX *ctx = NULL;
         if(url.is_https){
             //Set up certificates
-            ctx = SSL_CTX_new(TLS_client_method());
+            ctx = SSL_CTX_new(SSLv23_client_method());
 
             int err;
             if(!args.cert_file && !args.cert_dir)
