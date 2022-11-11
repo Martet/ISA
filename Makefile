@@ -1,15 +1,10 @@
-XMLLDFLAGS!=pkg-config --libs libxml-2.0
-XMLLDFLAGS+=$(shell pkg-config --libs libxml-2.0)
-XMLCFLAGS!=pkg-config --cflags libxml-2.0
-XMLCFLAGS+=$(shell pkg-config --cflags libxml-2.0)
-
-CXXFLAGS:=$(XMLCFLAGS) -std=c++17 -Wall -Wextra -g
-LDLIBS:=$(XMLLDFLAGS) -lssl -lcrypto
+CXXFLAGS=$(shell pkg-config --cflags libxml-2.0) -std=c++17 -Wall -Wextra -g
+LDLIBS=$(shell pkg-config --libs libxml-2.0) -lssl -lcrypto
 
 feedreader: feedreader.cpp
 
 test: feedreader
-	pytest
+	python3 -m pytest
 
 clean:
 	rm -f feedreader

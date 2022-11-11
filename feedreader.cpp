@@ -1,3 +1,6 @@
+// feedreader.cpp - a lightweight utility for getting rss and atom feeds
+// Author - Martin Zmitko (xzmitk01@stud.fit.vutbr.cz)
+
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -12,15 +15,15 @@
 
 #define BUF_SIZE 4096
 
-#define ERROR_CONTINUE(msg) if(1){\
-    std::cerr << url.url << " - " << msg << "\n";\
+#define SSL_ERROR(msg) do{\
+    response = url.url + " - " + msg + "\n";\
     if(bio){\
         BIO_reset(bio);\
         BIO_free_all(bio);\
     }\
     if(ctx) SSL_CTX_free(ctx);\
-    continue;\
-}
+    return false;\
+} while(0)
 
 #define XML_ERROR do{\
     xmlCleanupParser();\
@@ -46,21 +49,21 @@ typedef struct args {
 } args_t;
 
 void print_help(){
-    std::cerr << "Usage: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u] [-h]\n";
-    std::cerr << "-f <feedfile>\tspecify a file with a list of URLs to read from\n";
-    std::cerr << "-c <certfile>\tspecify a certificate to use\n";
-    std::cerr << "-C <certdir>\tspecify a directory with certificates to use\n";
-    std::cerr << "-T\t\tprint the time of each feed entry\n";
-    std::cerr << "-a\t\tprint the author of each feed entry\n";
-    std::cerr << "-u\t\tprint the associated url of each feed entry\n";
-    std::cerr << "-h\t\tprint this help message and exit\n";
+    std::cerr << "Pouziti: feedreader <URL | -f <feedfile>> [-c <certfile>] [-C <certdir>] [-T] [-a] [-u] [-h]\n";
+    std::cerr << "-f <feedfile>\tpouzit soubor se seznamem zdroju\n";
+    std::cerr << "-c <certfile>\tpouzit soubor s certifikatem\n";
+    std::cerr << "-C <certdir>\tpouzit slozku s certifikaty\n";
+    std::cerr << "-T\t\tvypsat cas posledni zmeny u zaznamu\n";
+    std::cerr << "-a\t\tvypsat autora u zaznamu\n";
+    std::cerr << "-u\t\tvypsat url u zaznamu\n";
+    std::cerr << "-h\t\tvypsat tuto zpravu a zkoncit\n";
 }
 
 //Read urls from given feedfile and save them as strings to vector urls
 void read_feedfile(char *feedfile, std::vector<std::string> &urls){
     std::ifstream file(feedfile);
     if(!file.is_open()){
-        std::cerr << "Failed opening feedfile " << feedfile << '\n';
+        std::cerr << "Otevreni souboru " << feedfile << " selhalo\n";
         return;
     }
     std::string line;
@@ -71,6 +74,7 @@ void read_feedfile(char *feedfile, std::vector<std::string> &urls){
     }
 }
 
+//Parse argumens and return them in args struct, save urls to vector urls
 args_t parse_args(int argc, char *argv[], std::vector<std::string> &urls){
     //Ensure correct positional argument parsing when POSIXLY_CORRECT is set
     if(argc > 1 && argv[1][0] != '-'){
@@ -103,11 +107,11 @@ args_t parse_args(int argc, char *argv[], std::vector<std::string> &urls){
                 args.show_url = true;
                 break;
             case 'h':
-                std::cerr << "Feedreader - an utility to get information from RSS feeds\n";
+                std::cerr << "Feedreader - nastroj pro ziskavani informaci z rss a atom zdroju\n";
                 print_help();
                 exit(0);
             default:
-                std::cerr << "Invalid argument\n";
+                std::cerr << "Neplatny argument\n";
                 print_help();
                 exit(1);
         }
@@ -117,7 +121,7 @@ args_t parse_args(int argc, char *argv[], std::vector<std::string> &urls){
         urls.push_back(std::string(argv[i]));
 
     if(urls.empty()){
-        std::cerr << "No URL specified\n";
+        std::cerr << "Zadne URL nebylo specifikovano\n";
         print_help();
         exit(1);
     }
@@ -130,11 +134,11 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     std::vector<url_t> out_urls;
     for(auto i: urls){
         url_t url;
-        std::regex re(R"(^\s*(https?)://([^/?#:]+)(:([0-9]+))?(.*)$)");
+        std::regex re(R"(^\s*(https?)://([a-zA-Z.-]+)(:([0-9]+))?(.*)$)");
         std::smatch matches;
 
         if(!std::regex_match(i, matches, re)){
-            std::cerr << "Failed parsing URL: " << i << '\n';
+            std::cerr << "Chyba ve zpracovani URL: " << i << '\n';
             exit(1);
         }
 
@@ -153,7 +157,7 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
                     throw std::exception();
             }
             catch(const std::exception &e){
-                std::cerr << "Failed parsing URL (invalid port): " << i << '\n';
+                std::cerr << "Chyba ve zpracovani URL (neplatny port): " << i << '\n';
                 exit(1);
             }
         url.authority = url.hostname + ":" + std::to_string(url.port);
@@ -169,12 +173,12 @@ bool parse_http(std::string &response){
     std::regex re(R"(^HTTP/1.[01] (\d{3} .+))");
     std::smatch matches;
     if(!std::regex_search(response, matches, re) || http_end == std::string::npos){
-        response = "Invalid HTTP response header";
+        response = "Neplatna HTTP hlavicka v odpovedi";
         return false;
     }
 
     if(matches[1] != "200 OK"){
-        response = "Invalid HTTP response code: " + std::string(matches[1]);
+        response = "Neplatny kod HTTP odpovedi: " + std::string(matches[1]);
         return false;
     }
 
@@ -182,6 +186,7 @@ bool parse_http(std::string &response){
     return true;
 }
 
+//Do the HTTP request, response will contain received data on success, error message on failure
 bool do_request(BIO *bio, url_t url, std::string &response){
     std::string request(
         "GET " + url.resource + " HTTP/1.0\r\n"
@@ -212,6 +217,7 @@ bool do_request(BIO *bio, url_t url, std::string &response){
     return true;
 }
 
+//Find a xmlNode with a specific name in a list starting from first_node, NULL if not found
 xmlNodePtr find_node(xmlNodePtr first_node, xmlChar *name){
     for(xmlNodePtr node = first_node; node != NULL; node = node->next){
         if(!xmlStrcmp(node->name, name)){
@@ -221,6 +227,7 @@ xmlNodePtr find_node(xmlNodePtr first_node, xmlChar *name){
     return NULL;
 }
 
+//Return a pointer to a xmlNode with a specific name in a list starting from first_node, NULL if not found
 xmlChar *node_content(xmlNodePtr first_node, xmlChar *name){
     xmlNodePtr node = find_node(first_node, name);
     if(!node)
@@ -229,7 +236,75 @@ xmlChar *node_content(xmlNodePtr first_node, xmlChar *name){
         return xmlNodeGetContent(node);
 }
 
-bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url){
+//Connect and authenticate using SSL, response will contain received data on success, error message on failure
+bool do_ssl(url_t url, args_t args, std::string &response){
+    BIO *bio = NULL;
+    SSL_CTX *ctx = NULL;
+    if(url.is_https){
+        //Set up certificates
+        ctx = SSL_CTX_new(SSLv23_client_method());
+
+        int err;
+        if(!args.cert_file && !args.cert_dir)
+            err = SSL_CTX_set_default_verify_paths(ctx);
+        else
+            err = SSL_CTX_load_verify_locations(ctx, args.cert_file, args.cert_dir);
+        if(err == 0)
+            SSL_ERROR("Nacteni certifikatu selhalo");
+
+        bio = BIO_new_ssl_connect(ctx);
+    }
+    else{
+        //Insecure connection
+        bio = BIO_new_connect(url.authority.c_str());
+    }
+
+    //Verify initialized connection
+    if(!bio)
+        SSL_ERROR("Spojeni selhalo");
+
+    //Set secure connection parameters
+    SSL *ssl = NULL;
+    if(url.is_https){
+        BIO_get_ssl(bio, &ssl);
+        SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+        SSL_set_tlsext_host_name(ssl, url.hostname.c_str());
+        BIO_set_conn_hostname(bio, url.authority.c_str());
+    }
+
+    //Make connection
+    if(BIO_do_connect(bio) <= 0)
+        SSL_ERROR("Spojeni selhalo");
+
+    if(url.is_https){
+        //Verify we've got a certificate
+        X509 *cert = SSL_get_peer_certificate(ssl);
+        if(!cert)
+            SSL_ERROR("Protejsek neodeslal certifikat");
+        X509_free(cert);
+
+        //Verify the certificate
+        long result = SSL_get_verify_result(ssl);
+        if(ssl && result != X509_V_OK)
+            SSL_ERROR("Spojeni selhalo (nepodarilo se overit certifikat)");
+    }
+
+    //Do the request
+    if(!do_request(bio, url, response))
+        SSL_ERROR("Spojeni selhalo");
+    
+    //Free SSL
+    if(bio){
+        BIO_reset(bio);
+        BIO_free_all(bio);
+    }
+    if(ctx) SSL_CTX_free(ctx);
+
+    return true;
+}
+
+//Parse XML and print output
+bool parse_xml(std::string xml, args_t args){
     xmlDocPtr doc = xmlParseDoc((xmlChar*) xml.c_str());
     if(!doc)
         return false;
@@ -238,6 +313,7 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
     if(!root)
         XML_ERROR;
 
+    //Decide if rss or atom
     bool is_rss;
     xmlChar *prop = NULL;
     if(!xmlStrcmp(root->name, (xmlChar *)"rss") &&
@@ -266,10 +342,12 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
     xmlChar *entry_name = (xmlChar *)(is_rss ? "item" : "entry");
     xmlNodePtr node = find_node(root->children, entry_name);
     do{
-        if(!first_entry && (show_author || show_time || show_url))
+        //Print empty line between entries
+        if(!first_entry && (args.show_author || args.show_time || args.show_url))
             std::cout << "\n";
         first_entry = false;
 
+        //Print title
         xmlChar *title = node_content(node->children, (xmlChar *)"title");
         if(!title)
             XML_ERROR;
@@ -277,19 +355,23 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
         free(title);
 
         xmlNodePtr url_node, author_node, time_node;
-        if(show_url && (url_node = find_node(node->children, (xmlChar *)"link"))){
+
+        //Print url
+        if(args.show_url && (url_node = find_node(node->children, (xmlChar *)"link"))){
             xmlChar *url = is_rss ? xmlNodeGetContent(url_node) : xmlGetProp(url_node, (xmlChar *)"href");
             std::cout << "URL: " << url << "\n";
             free(url);
         }
 
-        if(show_author && (author_node = find_node(node->children, (xmlChar *)"author"))){
+        //Print author
+        if(args.show_author && (author_node = find_node(node->children, (xmlChar *)"author"))){
             xmlChar *author = xmlNodeGetContent(is_rss ? author_node : author_node->children->next);
             std::cout << "Autor: " << author << "\n";
             free(author);
         }
 
-        if(show_time && (time_node = find_node(node->children, (xmlChar *)(is_rss ? "pubDate" : "updated")))){
+        //Print time of update
+        if(args.show_time && (time_node = find_node(node->children, (xmlChar *)(is_rss ? "pubDate" : "updated")))){
             xmlChar *time = xmlNodeGetContent(time_node);
             std::cout << "Aktualizace: " << time << "\n";
             free(time);
@@ -304,7 +386,7 @@ bool parse_xml(std::string xml, bool show_time, bool show_author, bool show_url)
 int main(int argc, char *argv[]){
     //Parse arguments and urls
     std::vector<std::string> urls;
-    args_t args = parse_args(argc, argv, urls);
+    auto args = parse_args(argc, argv, urls);
     auto parsed_urls = parse_urls(urls);
 
     //Set up OpenSSL
@@ -313,85 +395,27 @@ int main(int argc, char *argv[]){
 
     //Loop through all urls
     int success = 1;
-    bool first_url = true;
     for(auto url : parsed_urls){
-        if(!first_url && parsed_urls.size() > 1)
+        //Print separator between feeds
+        if(!success && parsed_urls.size() > 1)
             std::cout << "\n";
 
-        BIO *bio = NULL;
-        SSL_CTX *ctx = NULL;
-        if(url.is_https){
-            //Set up certificates
-            ctx = SSL_CTX_new(SSLv23_client_method());
-
-            int err;
-            if(!args.cert_file && !args.cert_dir)
-                err = SSL_CTX_set_default_verify_paths(ctx);
-            else
-                err = SSL_CTX_load_verify_locations(ctx, args.cert_file, args.cert_dir);
-            if(err == 0)
-                ERROR_CONTINUE("Certificate verification failed");
-
-            bio = BIO_new_ssl_connect(ctx);
-        }
-        else{
-            //Insecure connection
-            bio = BIO_new_connect(url.authority.c_str());
-        }
-
-        //Verify initialized connection
-        if(!bio)
-            ERROR_CONTINUE("Connection failed");
-
-        //Set secure connection parameters
-        SSL *ssl = NULL;
-        if(url.is_https){
-            BIO_get_ssl(bio, &ssl);
-            SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
-            SSL_set_tlsext_host_name(ssl, url.hostname.c_str());
-            BIO_set_conn_hostname(bio, url.authority.c_str());
-        }
-
-        //Make connection
-        if(BIO_do_connect(bio) <= 0)
-            ERROR_CONTINUE("Connection failed");
-
-        if(url.is_https){
-            //Verify we've got a certificate
-            X509 *cert = SSL_get_peer_certificate(ssl);
-            if(!cert)
-                ERROR_CONTINUE("Invalid host certificate");
-            X509_free(cert);
-
-            //Verify the certificate
-            long result = SSL_get_verify_result(ssl);
-            if(ssl && result != X509_V_OK)
-                ERROR_CONTINUE("Connection failed");
-        }
-
-        //Do the request
         std::string response;
-        if(!do_request(bio, url, response))
-            ERROR_CONTINUE("Connection failed");
-        
-        //Free SSL
-        if(bio){
-            BIO_reset(bio);
-            BIO_free_all(bio);
+        if(!do_ssl(url, args, response)){
+            std::cerr << url.url << " - " << response << "\n";
+            continue;
         }
-        if(ctx) SSL_CTX_free(ctx);
 
         if(!parse_http(response)){
             std::cerr << url.url << " - " << response << "\n";
             continue;
         }
 
-        if(!parse_xml(response, args.show_time, args.show_author, args.show_url)){
-            std::cerr << url.url << " - Error parsing XML\n";
+        if(!parse_xml(response, args)){
+            std::cerr << url.url << " - Chyba ve zpracovani XML\n";
             continue;
         }
 
-        first_url = false;
         success = 0;
     }
 
