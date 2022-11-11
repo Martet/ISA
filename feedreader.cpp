@@ -134,7 +134,7 @@ std::vector<url_t> parse_urls(std::vector<std::string> &urls){
     std::vector<url_t> out_urls;
     for(auto i: urls){
         url_t url;
-        std::regex re(R"(^\s*(https?)://([a-zA-Z.-]+)(:([0-9]+))?(.*)$)");
+        std::regex re(R"(^\s*(https?)://([a-zA-Z0-9.-]+)(:([0-9]+))?(.*)$)");
         std::smatch matches;
 
         if(!std::regex_match(i, matches, re)){
@@ -402,7 +402,7 @@ int main(int argc, char *argv[]){
 
         std::string response;
         if(!do_ssl(url, args, response)){
-            std::cerr << url.url << " - " << response << "\n";
+            std::cerr << response;
             continue;
         }
 
