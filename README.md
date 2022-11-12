@@ -10,7 +10,7 @@ Program je napsaný v jazyce C++ s použitím knihoven OpenSSL pro zabezpečené
 Program vypisuje informace načtené ze vstupních URL na standardní výstup, dle specifikace argumentů při spuštění.
 
 ### Překlad programu
-Program se překládá pomocí přiloženého Makefile příkazem `make` (je podporován pouze GNU make) pomocí překladače g++.
+Program se překládá pomocí přiloženého Makefile příkazem `make` (je podporován pouze GNU make) pomocí překladače c++.
 Pro vyčištění dočasných souborů a přeloženého spustitelného souboru použijte příkaz `make clean`.
 
 ### Použití programu
@@ -24,7 +24,7 @@ Pro vyčištění dočasných souborů a přeloženého spustitelného souboru p
 - `-h` - vypíše informace o použití programu a skončí
 
 Na pořadí argumentů nezáleží, program je schopný zpracovat více URL zadaných jako argumenty.
-Je možná i kombinace souboru feedfile a URL zadaných jako argument, zpracují se všechny.
+Je možná i kombinace souboru feedfile a URL zadaných jako argument, zpracují se všechny, ovšem musí být jedním z obou způsobů zadané alespoň jedno URL.
 Po úspěšném zpracování alespoň jednoho zdroje skončí program s chybovým kódem 0, jinak 1.
 
 ### Testování
