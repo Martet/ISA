@@ -1,7 +1,8 @@
 # Síťové aplikace a správa sítí - Projekt
 ## Čtečka novinek ve formátu Atom a RSS s podporou TLS
-### Autor: Martin Zmitko <xzmitk01@stud.fit.vutbr.cz>
-### Datum: 12. 11. 2022
+Autor: Martin Zmitko <xzmitk01@stud.fit.vutbr.cz>
+
+Datum: 12. 11. 2022
 
 ### Popis programu
 Jednoduchý nástroj pro získávání a výpis informací z RSS 2.0 a Atom zdrojů.
@@ -31,12 +32,12 @@ Součástí řešení jsou testy funkčnosti programu. Testy jsou napsané v jaz
 Testy se spouští příkazem `make test`.
 
 ### Odevzdané soubory
-xzmitk01.tar
-├── feedreader.cpp
-├── Makefile
-├── manual.pdf
-├── README
-└── test
-    ├── empty.txt
-    ├── feedfile.txt
-    └── test_feedreader.py
+    xzmitk01.tar
+    ├── feedreader.cpp
+    ├── Makefile
+    ├── manual.pdf
+    ├── README
+    └── test
+        ├── empty.txt
+        ├── feedfile.txt
+        └── test_feedreader.py
