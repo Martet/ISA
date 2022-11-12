@@ -1,5 +1,6 @@
 CXXFLAGS=$(shell pkg-config --cflags libxml-2.0) -std=c++17 -Wall -Wextra -g
 LDLIBS=$(shell pkg-config --libs libxml-2.0) -lssl -lcrypto
+CC=g++
 
 feedreader: feedreader.cpp
 
