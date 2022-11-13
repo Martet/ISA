@@ -2,7 +2,7 @@
 ## Čtečka novinek ve formátu Atom a RSS s podporou TLS
 Autor: Martin Zmitko <xzmitk01@stud.fit.vutbr.cz>
 
-Datum: 12. 11. 2022
+Datum: 13. 11. 2022
 
 ### Popis programu
 Jednoduchý nástroj pro získávání a výpis informací z RSS 2.0 a Atom zdrojů.

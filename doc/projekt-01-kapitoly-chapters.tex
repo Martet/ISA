@@ -1,0 +1,63 @@
+\chapter{Úvod}
+V této zprávě se věnuji zpracování projektu do předmětu ISA -- Čtečka novinek ve formátu Atom a RSS s podporou TLS. Cílem bylo navrhnout a implementovat program v jazyce C/C++ se vstupem jako seznam odkazů na vzdálené Atom a RSS zdroje a výstupem jako seznam zpráv, které vzdálené zdroje obsahují. Důležitou součástí programu je možnost zabezpečené komunikace pomocí SSL/TLS.
+
+\section{SSL/TLS}
+SSL (později nahrazeno TLS) jsou protokoly navržené k bezpečné a šifrované síťové komunikaci. Komunikace probíhá v několika krocích, které jdou shrnout ve třech nejdůležitějších bodech: \cite{SSL}
+\begin{enumerate}
+    \item navázání komunikace a dohoda účastníků na použitých algoritmech
+    \item odeslání serverového certifikátu klientovi, který ověří pomocí veřejného klíče certifikační autority jeho platnost
+    \item po úspěšném ověření probíhá zbytek symetricky šifrované komunikace
+\end{enumerate}
+
+\section{RSS a Atom feedy}
+RSS a Atom jsou standardizované formáty webových zdrojů umožňující snadno automatizovatelné sledování novinek z webových stránek. Tyto zdroje poskytují informace o samotném zdroji a seznam nových příspěvků a informací o nich (např. jméno autora, datum publikace, krátký popis a podobné). Zdroje jsou poskytovány ve formátu XML s jasnou specifikací \cite{RSS} \cite{Atom}.
+
+\chapter{Návrh a implementace}
+Program se skládá z jednoho zdrojového souboru v jazyce C++, \texttt{feedreader.cpp}, který obsahuje veškerý zdrojový kód. Kód není rozdělený do modulů z důvodu jeho relativně krátké délky a jednoduchosti. Jednotlivé funkční celky jsou rozděleny do funkcí.
+
+\section{Zpracování argumentů}
+Zpracování argumentů probíhá ve funkci \texttt{parse\_args()} s použitím funkce \texttt{getopt()} ze systémové stejnojmenné knihovny. Funkce \texttt{parse\_args()} vrací strukturu \texttt{args\_t}, která obsahuje veškeré informace získané z argumentů, také je do vektoru \texttt{urls} uložen seznam odkazů, které se v argumentech vyskytly.
+
+Kvůli chování funkce \texttt{getopt()}, kdy při nastavené systémové proměnné\\ \texttt{POSIXLY\_CORRECT} ukončuje zpracování argumentů při prvním výskytu pozičního argumentu \cite{getopt}, což odporuje specifikaci v zadání (URL by mělo být na prvním místě), je první poziční argument považován za URL a ukazatel \texttt{argv} posunut na další argument.
+
+Program umožňuje kombinaci přímo zadaných URL argumentem (může být i více naráz) a feedfile. Zdroje se zpracují všechny.
+
+\section{Zpracování odkazů}
+Po případném přečtení zadaného feedfile (s využitím \texttt{std::ifstream}) jsou jednotlivá URL parsována ve funkci \texttt{parse\_urls()} pomocí regulárního výrazu \cite{regex} s matching skupinami, do kterých se uloží jednotlivé součásti URL. V URL musí být povinně specifikovaný protokol (podporovány jsou HTTP a HTTPS). Volitelně lze určit port, jinak se doplní podle protokolu (80 pro HTTP, 443 pro HTTPS).
+
+\section{TLS spojení}
+K TLS spojení využívám knihovnu OpenSSL \cite{OpenSSL}. Navázaní spojení probíhá pro každý zdroj ve funkci \texttt{do\_ssl()}. Samotná HTTP komunikace proběhne ve funkci \texttt{do\_request()} s pomocí BIO (abstrakce pro vstupně-výstupní datový proud socketu). Spojení probíhá na základě postupu naznačeného v IBM manuálu pro vývojáře \cite{IBM}.
+
+Formát přijatého HTTP požadavku a kód odpovědi jsou zkontrolovány pomocí regulárního výrazu ve funkci \texttt{parse\_http()}.
+
+\section{Zpracování XML a výpis}
+Zpracování přijatého XML zajišťuje knihovna libxml2 \cite{XML} a probíhá ve funkci \texttt{parse\_xml()}. Rozpoznání, jestli se jedná o RSS nebo Atom zdroj je zajištěno porovnáním názvu a atributů kořenového uzlu. Na základě typu zdroje se určí názvy uzlů a struktura, podle kterých se ve zdroji dále vyhledává. Při výpisu více zdrojů nebo položek se správné vypsání prázdných řádků řeší pomocí nastavení vlajky po zpracování první položky.
+
+Ve zdroji se vyhledává pomocí pomocných funkcí \texttt{find\_node()} a \texttt{node\_content()}. Vstupem funkcí je první uzel v seznamu a název vyhledávaného uzlu, výstupem je ukazatel na nalezený uzel, resp. ukazatel na textový obsah nalezeného uzlu.
+
+Při nastaveném výpisu dodatečných informací je pro každou položku prohledán seznam pod-uzlů a při nalezení prvního požadovaného je jeho obsah vypsán. Pokud položka obsahuje více požadovaných záznamů (např. více autorů), je vypsán vždy pouze první nalezený.
+
+\chapter{Použití}
+Po překladu (\ref{preklad}) se vytvoří spustitelný soubor \texttt{feedreader}, který se spouští s následujícími parametry:
+\begin{verbatim}
+./feedreader URL | -f <feedfile>> [-c <certfile>] [-C <certdir>]
+[-T] [-a] [-u] [-h]
+-f <feedfile> - nastavení souboru se seznamem odkazů na zdroje s jedním URL
+na každém řádku
+-c <certfile> - nastavení souboru s certifikátem použitým k šifrované
+komunikaci se zdrojem
+-C <certdir> - nastavení složky s certifikáty použitými k šifrované
+komunikaci se zdrojem
+-T - vypsat čas poslední změny u záznamu
+-a - vypsat autora u záznamu
+-u - vypsat URL u záznamu
+-h - vypíše informace o použití programu a skončí
+\end{verbatim}
+
+Pořadí parametrů je libovolné a je možné specifikovat více URL, stejně tak kombinovat feedfile a URL v parametrech, URL ale nemůže být mezi flagy a před flagy může být maximálně jedno URL. Program vypíše požadované informace na standardní výstup.
+
+\section{Překlad} \label{preklad}
+Překlad je zajištěn překladačem c++ a systémem GNU make \textbf{(BSD make není podporován)}. Prerekvizitami jsou knihovny libssl (ověřeno s verzí 10 na serverech merlin a eva) a libxml (ověřeno s verzí 10 na serverech merlin a eva). Překlad se spouští příkazem \texttt{make}, smazání souborů vytvořených při překladu se provede příkazem \texttt{make clean}.
+
+\chapter{Testování}
+K programu jsou přiloženy testy k ověření funkčnosti spojení, zpracování argumentů a~zdrojů a správného formátu výstupu. Testy jsou napsány v jazyce Python 3.8 s použitím frameworku pytest \cite{pytest} a volají se příkazem \texttt{make test}. Testy jsem doplňoval v průběhu implementace pro ověření funkčnosti nového kódu.
